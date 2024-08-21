@@ -5,7 +5,6 @@ from PokerEnvSixMax import PokerEnvSixMax
 import os
 import matplotlib.pyplot as plt
 
-
 def evaluate_hand(player_hand, community_cards):
     evaluator = Evaluator()
     if len(player_hand) + len(community_cards) >= 5:
@@ -14,7 +13,6 @@ def evaluate_hand(player_hand, community_cards):
     else:
         return None
 
-
 def convert_cards(cards):
     print(f"Converting cards: {[Card.int_to_str(card) for card in cards]}")  # Debug print
     return cards
@@ -22,52 +20,38 @@ def convert_cards(cards):
 
 def process_state(state: dict) -> np.ndarray:
     """
-    Processes the raw game state into a format suitable for the DQN model.
+    Procesa el estado crudo del juego en un formato adecuado para el modelo DQN.
 
     Args:
-        state (dict): The raw game state.
+        state (dict): El estado crudo del juego.
 
     Returns:
-        np.ndarray: The processed state as a numpy array.
+        np.ndarray: El estado procesado como un array numpy.
     """
-    # Extract and process relevant state components
-    round_stage = state['round']
-    player_hand = state['player_hand']
-    community_cards = state['community_cards']
-
-
-    # Evaluate the player's hand rank
-    hand_rank = evaluate_hand(player_hand, community_cards)
+    # Evaluar el rango de la mano del jugador
+    hand_rank = evaluate_hand(state['player_hand'], state['community_cards'])
     hand_rank = hand_rank if hand_rank is not None else -1
 
-
-
-    # Convert data to numpy arrays
+    # Convertir datos a arrays numpy
     pot_size = np.array([state['pot_size']])
     current_bet = np.array([state['current_bet']])
     player_chips = np.array(state['player_chips'])
     action_history = np.array(state['action_history'])
     player_position = np.array([state['player_position']])
-    win_probability = np.array(state['win_probability'])
-    pot_odds = np.array(state['pot_odds'])
+    win_probability = np.array([state['win_probability']])
+    pot_odds = np.array([state['pot_odds']])
     stack_sizes = np.array(state['stack_sizes'])
     previous_bets = np.array(state['previous_bets'])
+    # game_id = np.array([state['game_id']])  # Incluye el ID del juego si es necesario
 
     hand_rank = np.array([hand_rank])
 
-    # Concatenate all components to form the state
+    # Concatenar todos los componentes para formar el estado
     processed_state = np.concatenate([
         hand_rank, pot_size, current_bet,
         player_chips, action_history, player_position,
         win_probability, pot_odds, stack_sizes, previous_bets
     ])
-
-    # Print statements for debugging
-    print(f"Actual state: {state}")
-    print(f"Round stage: {round_stage}")
-    print(f"Player {player_position} hand: {[Card.int_to_str(card) for card in player_hand]}")
-    print(f"Community hand: {[Card.int_to_str(card) for card in community_cards]}")
-    print(f"Rank hand: {hand_rank}")
 
     return processed_state
 
@@ -93,10 +77,15 @@ def plot_progress(rewards, epsilons):
     plt.show()
 
 
+def get_state_size(self):
+    state = env.reset()  # Obtener el estado inicial
+    processed_state = process_state(state)  # Procesar el estado
+    return processed_state.size  # Devuelve el tamaño del estado procesado
+
 if __name__ == "__main__":
     EPISODES = 3500
     env = PokerEnvSixMax()
-    state_size = 40  # Ajusta el tamaño del estado según los datos procesados
+    state_size = 24    # Ajusta el tamaño del estado según los datos procesados
     action_size = 4
     agent = DQNAgent(state_size, action_size)
 
@@ -114,7 +103,7 @@ if __name__ == "__main__":
 
     rewards = []
     epsilons = []
-
+    env.create_new_game()
     for e in range(EPISODES):
         state = env.reset()
         state = process_state(state)

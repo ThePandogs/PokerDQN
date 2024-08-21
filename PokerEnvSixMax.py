@@ -1,15 +1,22 @@
 import random
+
+import numpy as np
 from treys import Card, Evaluator
 from itertools import combinations
 
 class PokerEnvSixMax:
     def __init__(self):
-        self.num_players = 6  # Número de jugadores
 
-        self.deck = self._create_deck()
-        self.evaluator = Evaluator()
-        self.reset()
+        self.evaluator = Evaluator()  # Inicializa el evaluador
 
+
+        self.num_players = 6
+        self.players_hands = []  # Asegúrate de que esto está inicializado correctamente
+        self.community_cards = []
+        self.player_position = 0
+
+        self.current_games = {}  # Mapa para almacenar el estado de múltiples partidas
+        self.game_id = 0  # ID único para cada nueva partida
     def _create_deck(self):
         """Crea y baraja un mazo de cartas."""
         deck = [Card.new(f'{rank}{suit}') for rank in '23456789TJQKA' for suit in 'cdhs']
@@ -20,28 +27,69 @@ class PokerEnvSixMax:
         """Reparte un número de cartas del mazo."""
         return [self.deck.pop(random.randrange(len(self.deck))) for _ in range(num)]
 
+    def create_new_game(self):
+        """
+        Inicializa un nuevo juego desde cero.
+        """
+        # Configuración del juego: barajar cartas, repartir a jugadores, etc.
+        self.deck = self.initialize_deck()
+        self.players = self.initialize_players()
+        self.current_phase = 'preflop'
+        self.current_game_id = 0  # Inicializa el ID del juego
+        self.reset()
+
     def reset(self):
-        """Reinicia el estado del juego para una nueva mano."""
-        self.deck = self._create_deck()
-        self.round_phase = "preflop"  # Reinicia la etapa del juego
-        self.community_cards = []
-        self.players_hands = [self._deal_cards(2) for _ in range(self.num_players)]
-        self.pot_size = 0
-        self.current_bet = 0
-        self.player_chips = [random.randint(200, 3400)] * self.num_players
-        self.action_history = [0] * self.num_players
-        self.player_position = 0  # Jugador en turno
-        self.win_probability = [0] * self.num_players
-        self.pot_odds = [0] * self.num_players
-        self.stack_sizes = self.player_chips.copy()
-        self.previous_bets = [0] * self.num_players
+        """
+        Restablece el estado del entorno al inicio de un nuevo episodio.
+
+        Returns:
+            dict: El estado inicial del entorno.
+        """
+        self.current_game_id += 1  # Incrementa el ID del juego
         self.done = False
-        self.round_history = []  # Historial de jugadas en la ronda
-        self.winner = None
-        self.winning_hand = None
-        state = self._get_state()
-        print(f"Nueva Partida: {state}")  # Imprime el estado después del reset
-        return state
+
+        # Inicializar el mazo y repartir las cartas
+        self.deck = self.initialize_deck()
+        self.players_hands = [self._deal_cards(2) for _ in range(self.num_players)]  # Reparte 2 cartas a cada jugador
+        self.community_cards = []
+        self.round_phase = 'preflop'  # Inicializa la fase de la ronda en 'preflop' al comienzo de un nuevo juego
+
+        # Inicializa el tamaño del bote y la apuesta actual
+        self.pot_size = 0
+        self.current_bet = 0  # Inicializar la apuesta actual
+
+        # Inicializa las apuestas anteriores de cada jugador
+        self.previous_bets = [0] * self.num_players  # Inicializa las apuestas de cada jugador en 0
+
+        self.win_probability = 0.5  # Valor temporal o calculado más adelante
+        self.pot_odds = 0
+        # Inicializa las fichas de cada jugador
+        self.player_chips = [1000] * self.num_players  # Asigna 1000 fichas a cada jugador
+        self.stack_sizes = [1000] * 6
+
+        # Inicializa el historial de la ronda y las acciones
+        self.round_history = []  # Historial vacío al inicio de cada episodio
+        self.action_history = []  # Inicializa el historial de acciones como una lista vacía
+
+
+
+        # Inicializar el estado
+        self.state = {
+            'player_hand': self.players_hands[0],  # La mano del jugador actual (posición 0 al inicio)
+            'community_cards': [],  # Cartas comunitarias vacías al inicio
+            'pot_size': 0,
+            'current_bet': self.current_bet,  # Asigna la apuesta inicial al estado
+            'player_chips': self.player_chips,  # Las fichas de los jugadores
+            'action_history': [],  # Historial de acciones vacío
+            'player_position': 0,  # Posición del jugador actual
+            'win_probability': 0.5,  # Probabilidad inicial de ganar
+            'pot_odds': 1.0,  # Odds del bote inicial
+            'stack_sizes': [1000] * 6,  # Tamaño de pila inicial
+            'previous_bets': self.previous_bets  # Apuestas anteriores
+        }
+
+        return self.state
+
     def _get_state(self):
         """Obtiene el estado actual del juego."""
         round_mapping = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3, 'showdown': 4}
@@ -61,7 +109,31 @@ class PokerEnvSixMax:
             'previous_bets': self.previous_bets,
         }
         return state
+    def initialize_deck(self):
+        """
+        Inicializa y baraja una nueva baraja de cartas.
+        """
+        deck =  self._create_deck()
+        np.random.shuffle(deck)
+        return deck
 
+    def initialize_players(self):
+        """
+        Inicializa el estado de los jugadores.
+        """
+        return {
+            'player_hand': [self.draw_card(), self.draw_card()],
+            'community_cards': [],
+            'pot': 0,
+            'bets': [0] * 6,
+            'player_position': 0
+        }
+
+    def draw_card(self):
+        """
+        Extrae una carta del mazo.
+        """
+        return self.deck.pop()
     def calculate_equity(self, player_hand, community_cards):
         """Simula el equity del jugador contra posibles manos oponentes."""
         if not community_cards:
@@ -92,7 +164,7 @@ class PokerEnvSixMax:
         if self.done:
             raise Exception("Game is already done. Reset the environment to start a new game.")
 
-        # Calcular equity y pot odds
+        # Cálculo de equity y pot odds
         equity = self.calculate_equity(self.players_hands[self.player_position], self.community_cards)
         pot_odds = self.calculate_pot_odds(self.current_bet, self.pot_size)
 
@@ -153,7 +225,7 @@ class PokerEnvSixMax:
         self._next_phase()
 
         # Mover al siguiente jugador
-        self.player_position = (self.player_position + 1) % 6
+        self.player_position = (self.player_position + 1) % self.num_players
 
         # Obtener el nuevo estado y verificar si el juego ha terminado
         state = self._get_state()
@@ -164,7 +236,6 @@ class PokerEnvSixMax:
             reward = rewards[self.player_position]
             self._determine_winner()  # Determina el ganador y la mano ganadora
             print(f"Game over. Player {self.player_position} reward: {reward}")
-
             print(f"Winner: Player {self.winner} with hand:{[Card.int_to_str(card) for card in self.winning_hand]} ")
         else:
             # Penaliza el fold solo si el juego termina
@@ -315,6 +386,8 @@ class PokerEnvSixMax:
         print(f"Previous bets: {self.previous_bets}")
         if self.round_phase == 'showdown':
             print(f"Winner: Player {self.winner + 1} with hand: {self.winning_hand}")
+
+
 
 
 # Ejemplo de uso

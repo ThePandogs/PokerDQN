@@ -1,6 +1,7 @@
 import logging
 from keras.api import optimizers, models, layers
 import numpy as np
+from keras.src.layers import Flatten
 from treys import Card
 
 from PrioritizedReplayBuffer import PrioritizedReplayBuffer
@@ -28,8 +29,7 @@ class DQNAgent:
     def _build_model(self):
         """Construye el modelo de red neuronal."""
         model = models.Sequential()
-        model.add(layers.Input(shape=(self.state_size,)))
-        model.add(layers.Dense(24, activation='relu'))
+        model.add(layers.InputLayer(input_shape=(24,)))  # Asegúrate de que la forma de entrada es (24,)
         model.add(layers.Dense(24, activation='relu'))
         model.add(layers.Dense(self.action_size, activation='linear'))
         model.compile(loss='mean_squared_error', optimizer=self.optimizer)
@@ -66,12 +66,12 @@ class DQNAgent:
         next_states = np.array([x[3] for x in minibatch])
         dones = np.array([x[4] for x in minibatch])
 
-        if len(states.shape) == 3 and states.shape[1] == 1:
-            states = np.squeeze(states, axis=1)
-        if len(next_states.shape) == 3 and next_states.shape[1] == 1:
-            next_states = np.squeeze(next_states, axis=1)
+        # Asegúrate de que las dimensiones sean (batch_size, 24)
+        states = np.squeeze(states, axis=1)  # Elimina la dimensión extra si no es necesaria
+        next_states = np.squeeze(next_states, axis=1)  # Elimina la dimensión extra si no es necesaria
 
-        print(type(states), states.dtype)
+        # Asegúrate de que la forma de `states` sea (batch_size, 24)
+        assert states.shape[1:] == (24,), f"Expected shape (batch_size, 24), but got {states.shape}"
 
         targets = self.model.predict(states)
         next_q_values = self.target_model.predict(next_states)
@@ -81,10 +81,6 @@ class DQNAgent:
                 targets[i][actions[i]] = rewards[i]
             else:
                 targets[i][actions[i]] = rewards[i] + self.gamma * np.max(next_q_values[i])
-
-        logging.debug(f"States shape: {states.shape}")
-        logging.debug(f"Targets shape: {targets.shape}")
-        logging.debug(f"Weights shape: {np.array(weights).shape}")
 
         # Entrenamiento del modelo con pesos
         self.model.fit(states, targets, epochs=1, verbose=0, sample_weight=np.array(weights))
