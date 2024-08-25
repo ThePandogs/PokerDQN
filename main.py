@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 from treys import Card, Evaluator
 from DQNAgent import DQNAgent
@@ -28,32 +30,38 @@ def process_state(state: dict) -> np.ndarray:
     Returns:
         np.ndarray: El estado procesado como un array numpy.
     """
-    # Evaluar el rango de la mano del jugador
-    hand_rank = evaluate_hand(state['player_hand'], state['community_cards'])
-    hand_rank = hand_rank if hand_rank is not None else -1
+    print(state)
+    # Datos de jugadores
+    player_hands = np.array([evaluate_hand(hand, state['community_cards']) for hand in state['player_hands']], dtype=np.float32)
+    player_chips = np.array(state['player_chips'], dtype=np.float32)
 
-    # Convertir datos a arrays numpy
-    pot_size = np.array([state['pot_size']])
-    current_bet = np.array([state['current_bet']])
-    player_chips = np.array(state['player_chips'])
-    action_history = np.array(state['action_history'])
-    player_position = np.array([state['player_position']])
-    win_probability = np.array([state['win_probability']])
-    pot_odds = np.array([state['pot_odds']])
-    stack_sizes = np.array(state['stack_sizes'])
-    previous_bets = np.array(state['previous_bets'])
-    # game_id = np.array([state['game_id']])  # Incluye el ID del juego si es necesario
+    player_positions = np.array([i for i, _ in enumerate(state['player_positions'])], dtype=np.float32)
+    win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
+    pot_odds = np.array(state['pot_odds'], dtype=np.float32)
+    stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
+    previous_bets = np.array(state['previous_bets'], dtype=np.float32)
 
-    hand_rank = np.array([hand_rank])
-
-    # Concatenar todos los componentes para formar el estado
+    round_stage = {"preflop": 0, "flop": 1, "turn": 2, "river": 3, "showdown": 4}.get(state['round'], -1)
+    pot_size = np.array([state['pot_size']], dtype=np.float32)
+    current_bet = np.array([state['current_bet']], dtype=np.float32)
+    action_history = np.array(state['action_history'], dtype=np.float32)
     processed_state = np.concatenate([
-        hand_rank, pot_size, current_bet,
-        player_chips, action_history, player_position,
-        win_probability, pot_odds, stack_sizes, previous_bets
+        np.array([round_stage], dtype=np.int32),
+        player_hands.flatten(),
+        pot_size,
+        current_bet,
+        player_chips.flatten(),
+        action_history.flatten(),
+        player_positions.flatten(),
+        win_probabilities.flatten(),
+        pot_odds.flatten(),
+        stack_sizes.flatten(),
+        previous_bets.flatten()
     ])
 
+    logging.debug(f"Processed state shape: {processed_state.shape}")
     return processed_state
+
 
 
 def plot_progress(rewards, epsilons):
@@ -77,15 +85,16 @@ def plot_progress(rewards, epsilons):
     plt.show()
 
 
-def get_state_size(self):
-    state = env.reset()  # Obtener el estado inicial
-    processed_state = process_state(state)  # Procesar el estado
+def get_state_size(env):
+    env.create_new_game()
+    state = env.reset()  # Resetea el entorno para obtener un estado inicial
+    processed_state = process_state(state)  # Procesa el estado crudo
     return processed_state.size  # Devuelve el tamaño del estado procesado
 
 if __name__ == "__main__":
     EPISODES = 3500
     env = PokerEnvSixMax()
-    state_size = 24    # Ajusta el tamaño del estado según los datos procesados
+    state_size = get_state_size(env)  # Llama a la función y obtiene el tamaño del estado
     action_size = 4
     agent = DQNAgent(state_size, action_size)
 

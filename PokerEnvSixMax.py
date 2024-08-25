@@ -1,399 +1,255 @@
 import random
-
+from itertools import combinations
 import numpy as np
 from treys import Card, Evaluator
-from itertools import combinations
+from Player import Player
+import sqlite3
+
 
 class PokerEnvSixMax:
-    def __init__(self):
-
+    def __init__(self, num_players=6, starting_chips=1000, small_blind=10, big_blind=20):
+        """Inicializa el entorno de Poker con ciegas y otros parámetros."""
         self.evaluator = Evaluator()  # Inicializa el evaluador
+        self.num_players = num_players
 
+        self.starting_chips = starting_chips
+        self.small_blind_amount = small_blind
+        self.big_blind_amount = big_blind
+        self.pot_size = 0
 
-        self.num_players = 6
-        self.players_hands = []  # Asegúrate de que esto está inicializado correctamente
+        # Posiciones de las ciegas
+        self.small_blind_position = 0
+        self.big_blind_position = 1
+
+        # Crear jugadores con nombres
+        self.players = [Player(f'Player{i}', i, starting_chips) for i in range(num_players)]
+
+        # Inicializar otras variables del juego
         self.community_cards = []
-        self.player_position = 0
+        self.round_history = []
+        self.action_history = []
+        self.done = False
+        self.folded_players = set()
+        self.current_bet = 0
+        self.current_phase = 'preflop'
+        self.game_id = 0
 
-        self.current_games = {}  # Mapa para almacenar el estado de múltiples partidas
-        self.game_id = 0  # ID único para cada nueva partida
+        # Asignar las ciegas
+        self._post_blinds()
+
+    ACTION_MAP = {
+        'fold': 0,
+        'call': 1,
+        'raise': 2,
+        'check': 3
+    }
+
+    def rotate_positions(self):
+        # Rota las posiciones de los jugadores
+        self.players.append(self.players.pop(0))  # Mueve el primer jugador al final de la lista
+
     def _create_deck(self):
         """Crea y baraja un mazo de cartas."""
         deck = [Card.new(f'{rank}{suit}') for rank in '23456789TJQKA' for suit in 'cdhs']
         random.shuffle(deck)
         return deck
 
+    def _post_blinds(self):
+        """Asigna las apuestas forzadas de las ciegas pequeña y grande."""
+        small_blind_player = self.players[self.small_blind_position]
+        big_blind_player = self.players[self.big_blind_position]
+
+        # La ciega pequeña apuesta
+        small_blind_player.update_chips(-self.small_blind_amount)
+        small_blind_player.update_bet(self.small_blind_amount)
+        self.pot_size += self.small_blind_amount
+        print(f"Player {self.small_blind_position + 1} posts small blind of {self.small_blind_amount}.")
+
+        # La ciega grande apuesta
+        big_blind_player.update_chips(-self.big_blind_amount)
+        big_blind_player.update_bet(self.big_blind_amount)
+        self.pot_size += self.big_blind_amount
+        self.current_bet = self.big_blind_amount
+        print(f"Player {self.big_blind_position + 1} posts big blind of {self.big_blind_amount}.")
+
     def _deal_cards(self, num):
         """Reparte un número de cartas del mazo."""
-        return [self.deck.pop(random.randrange(len(self.deck))) for _ in range(num)]
+        return [self.deck.pop() for _ in range(num)]
 
     def create_new_game(self):
-        """
-        Inicializa un nuevo juego desde cero.
-        """
-        # Configuración del juego: barajar cartas, repartir a jugadores, etc.
-        self.deck = self.initialize_deck()
-        self.players = self.initialize_players()
-        self.current_phase = 'preflop'
-        self.current_game_id = 0  # Inicializa el ID del juego
+        """Inicializa un nuevo juego desde cero."""
+        self.deck = self._create_deck()
         self.reset()
 
     def reset(self):
-        """
-        Restablece el estado del entorno al inicio de un nuevo episodio.
-
-        Returns:
-            dict: El estado inicial del entorno.
-        """
-        self.current_game_id += 1  # Incrementa el ID del juego
+        """Restablece el estado del entorno al inicio de un nuevo episodio."""
         self.done = False
 
+        # Rotar las ciegas
+        self._rotate_blinds()
+
         # Inicializar el mazo y repartir las cartas
-        self.deck = self.initialize_deck()
-        self.players_hands = [self._deal_cards(2) for _ in range(self.num_players)]  # Reparte 2 cartas a cada jugador
+        self.deck = self._create_deck()
+        for player in self.players:
+            player.update_hand(self._deal_cards(2))  # Reparte 2 cartas a cada jugador
         self.community_cards = []
-        self.round_phase = 'preflop'  # Inicializa la fase de la ronda en 'preflop' al comienzo de un nuevo juego
+        self.current_phase = 'preflop'
 
-        # Inicializa el tamaño del bote y la apuesta actual
+        self.folded_players.clear()
         self.pot_size = 0
-        self.current_bet = 0  # Inicializar la apuesta actual
+        self.current_bet = 0
+        self.round_history = []
+        self.action_history = []
 
-        # Inicializa las apuestas anteriores de cada jugador
-        self.previous_bets = [0] * self.num_players  # Inicializa las apuestas de cada jugador en 0
+        for player in self.players:
+            player.update_chips(self.starting_chips)  # Asigna fichas iniciales a cada jugador
+            player.update_bet(0)
 
-        self.win_probability = 0.5  # Valor temporal o calculado más adelante
-        self.pot_odds = 0
-        # Inicializa las fichas de cada jugador
-        self.player_chips = [1000] * self.num_players  # Asigna 1000 fichas a cada jugador
-        self.stack_sizes = [1000] * 6
+        # Asignar las ciegas
+        self._post_blinds()
 
-        # Inicializa el historial de la ronda y las acciones
-        self.round_history = []  # Historial vacío al inicio de cada episodio
-        self.action_history = []  # Inicializa el historial de acciones como una lista vacía
+        return self._get_state()
 
-
-
-        # Inicializar el estado
-        self.state = {
-            'player_hand': self.players_hands[0],  # La mano del jugador actual (posición 0 al inicio)
-            'community_cards': [],  # Cartas comunitarias vacías al inicio
-            'pot_size': 0,
-            'current_bet': self.current_bet,  # Asigna la apuesta inicial al estado
-            'player_chips': self.player_chips,  # Las fichas de los jugadores
-            'action_history': [],  # Historial de acciones vacío
-            'player_position': 0,  # Posición del jugador actual
-            'win_probability': 0.5,  # Probabilidad inicial de ganar
-            'pot_odds': 1.0,  # Odds del bote inicial
-            'stack_sizes': [1000] * 6,  # Tamaño de pila inicial
-            'previous_bets': self.previous_bets  # Apuestas anteriores
-        }
-
-        return self.state
+    def _rotate_blinds(self):
+        """Mueve las posiciones de la ciega pequeña y la ciega grande al siguiente jugador."""
+        self.small_blind_position = (self.small_blind_position + 1) % self.num_players
+        self.big_blind_position = (self.big_blind_position + 1) % self.num_players
+        self.player_position = (self.big_blind_position + 1) % self.num_players
 
     def _get_state(self):
-        """Obtiene el estado actual del juego."""
+        """Obtiene el estado actual del juego, accediendo a los historiales de cada jugador."""
         round_mapping = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3, 'showdown': 4}
+        pot_odds = self.calculate_pot_odds(self.current_bet, self.pot_size)
 
         state = {
-            'round': round_mapping.get(self.round_phase, -1),
-            'player_hand': self.players_hands[self.player_position],
+            'round': round_mapping.get(self.current_phase, -1),
             'community_cards': self.community_cards,
             'pot_size': self.pot_size,
             'current_bet': self.current_bet,
-            'player_chips': self.player_chips,
-            'action_history': self.action_history,  # Ahora se espera que ya estén en formato numérico
+            'pot_odds': pot_odds,
+            'player_positions': [player.name for player in self.players],
+            'player_hands': [[card for card in player.hand] for player in self.players],
+            'player_chips': [player.chips for player in self.players],
+            'previous_bets': [player.previous_bet for player in self.players],
+            'round_history': self.round_history,
             'player_position': self.player_position,
-            'win_probability': self.win_probability,
-            'pot_odds': self.pot_odds,
-            'stack_sizes': self.stack_sizes,
-            'previous_bets': self.previous_bets,
+            'win_probabilities': [self.calculate_equity(player.hand, self.community_cards) for player in self.players],
+            'stack_sizes': [player.chips for player in self.players],
+            'action_histories': [player.get_action_history() for player in self.players],
+            'bet_histories': [player.get_bet_history() for player in self.players]
         }
+        print(state)  # Debugging output
         return state
-    def initialize_deck(self):
-        """
-        Inicializa y baraja una nueva baraja de cartas.
-        """
-        deck =  self._create_deck()
-        np.random.shuffle(deck)
-        return deck
 
-    def initialize_players(self):
-        """
-        Inicializa el estado de los jugadores.
-        """
-        return {
-            'player_hand': [self.draw_card(), self.draw_card()],
-            'community_cards': [],
-            'pot': 0,
-            'bets': [0] * 6,
-            'player_position': 0
-        }
-
-    def draw_card(self):
-        """
-        Extrae una carta del mazo.
-        """
-        return self.deck.pop()
-    def calculate_equity(self, player_hand, community_cards):
-        """Simula el equity del jugador contra posibles manos oponentes."""
-        if not community_cards:
-            return 0.5  # Asumir 50% de equity si no hay cartas comunitarias
-        hand_rank = self.evaluator.evaluate(player_hand, community_cards)
-        return 1 / (1 + hand_rank / 10000)  # Fórmula básica para estimar probabilidad de ganar
-
-    def calculate_pot_odds(self, current_bet, pot_size):
-        """Calcula las pot odds."""
-        if current_bet == 0:
-            return 0
-        return current_bet / (pot_size + current_bet)
-
-    def should_bluff(self, equity, community_cards):
-        """Decide si hacer farol en función del equity y las cartas comunitarias."""
-        if equity < 0.2:  # Farolea si el equity es bajo
-            if self.is_failed_draw(community_cards):
-                return True
-        return False
-
-    def is_failed_draw(self, community_cards):
-        """Detecta si el jugador falló un proyecto de color o escalera."""
-        # Esta es una simplificación; en la realidad, se necesitaría analizar las cartas.
-        return True
+    def _next_phase(self):
+        """Avanza a la siguiente fase del juego."""
+        if self.current_phase == 'preflop':
+            self.community_cards = []
+            self.current_phase = 'flop'
+            self.community_cards.extend(self._deal_cards(3))
+        elif self.current_phase == 'flop':
+            self.current_phase = 'turn'
+            self.community_cards.append(self._deal_cards(1)[0])
+        elif self.current_phase == 'turn':
+            self.current_phase = 'river'
+            self.community_cards.append(self._deal_cards(1)[0])
+        elif self.current_phase == 'river':
+            self.current_phase = 'showdown'
+        elif self.current_phase == 'showdown':
+            self.done = True
 
     def step(self, action):
-        """Ejecuta una acción y actualiza el estado del juego."""
         if self.done:
             raise Exception("Game is already done. Reset the environment to start a new game.")
 
-        # Cálculo de equity y pot odds
-        equity = self.calculate_equity(self.players_hands[self.player_position], self.community_cards)
-        pot_odds = self.calculate_pot_odds(self.current_bet, self.pot_size)
-
-        # Inicializa el castigo y la acción del jugador actual
-        reward = 0
+        player = self.players[self.player_position]
         action_taken = None
+        reward = 0
 
-        # Lógica para manejar la acción (fold, call, raise, etc.)
         if action == 0:  # Fold
-            self.done = True
-            reward = -10  # Castigo fijo por hacer fold
+            total_bet_lost = player.previous_bet
+            reward = -total_bet_lost
+            self.done = len(self.folded_players) >= self.num_players - 1
             action_taken = 'fold'
-            print(f"Player {self.player_position} folds.")
+            self.player_folds(self.player_position)
+            # Registrar la acción y la apuesta en el jugador
+            player.set_action('fold', player.previous_bet)
 
         elif action == 1:  # Call
-            if equity > pot_odds:
-                call_amount = self.current_bet - self.previous_bets[self.player_position]
-                self.player_chips[self.player_position] -= call_amount
-                self.pot_size += call_amount
-                self.previous_bets[self.player_position] = self.current_bet
-                action_taken = 'call'
-                print(f"Player {self.player_position} calls {call_amount}.")
-            else:
-                reward = -10
-                self.done = True
-                action_taken = 'fold'
-                print(f"Player {self.player_position} folds due to insufficient equity.")
+            call_amount = self.current_bet - player.previous_bet
+            player.update_chips(-call_amount)
+            self.pot_size += call_amount
+            player.update_bet(self.current_bet)
+            action_taken = 'call'
+            player.set_action('call', call_amount)
+            reward = 0
 
         elif action == 2:  # Raise
-            if equity > 0.5:
-                raise_amount = self.calculate_raise_amount(equity)
-            else:
-                if self.should_bluff(equity, self.community_cards):
-                    raise_amount = self.calculate_bluff_raise_amount()
-                else:
-                    reward = -self.calculate_bluff_penalty()
-                    self.done = True
-                    action_taken = 'fold'
-                    print(f"Player {self.player_position} folds due to low equity and failed bluff.")
-                    return self._get_state(), reward, self.done, {}
-
-            self.player_chips[self.player_position] -= (self.current_bet + raise_amount)
+            raise_amount = self.calculate_raise_amount(player)
+            player.update_chips(-(self.current_bet + raise_amount))
             self.pot_size += (self.current_bet + raise_amount)
             self.current_bet += raise_amount
-            self.previous_bets[self.player_position] = self.current_bet
+            player.update_bet(self.current_bet)
             action_taken = 'raise'
-            print(f"Player {self.player_position} raises to {self.current_bet}.")
+            player.set_action('raise', self.current_bet + raise_amount)
+            reward = raise_amount * 0.1
 
         elif action == 3:  # Check
-            self.previous_bets[self.player_position] = self.current_bet
+            player.update_bet(self.current_bet)
             action_taken = 'check'
-            print(f"Player {self.player_position} checks.")
+            player.set_action('check')
+            reward = 0
 
-        # Actualizar el historial de acciones
-        self.round_history.append((self.player_position, action_taken))
+        # Registro detallado de apuestas por ronda
+        self.round_history.append({
+            'player_position': self.player_position,
+            'action': action_taken,
+            'amount': player.previous_bet
+        })
 
-        # Avanzar a la siguiente fase del juego
         self._next_phase()
-
-        # Mover al siguiente jugador
         self.player_position = (self.player_position + 1) % self.num_players
 
-        # Obtener el nuevo estado y verificar si el juego ha terminado
         state = self._get_state()
         done = self._is_game_over()
 
         if done:
-            rewards = self._calculate_rewards()  # Calcula la recompensa final si el juego termina
-            reward = rewards[self.player_position]
-            self._determine_winner()  # Determina el ganador y la mano ganadora
-            print(f"Game over. Player {self.player_position} reward: {reward}")
-            print(f"Winner: Player {self.winner} with hand:{[Card.int_to_str(card) for card in self.winning_hand]} ")
+            rewards = self._calculate_rewards()
+            return state, rewards[self.player_position], done, {}
         else:
-            # Penaliza el fold solo si el juego termina
-            reward = -10 if action == 0 else reward
+            num_active_players = self.num_players - len(self.folded_players)
+            if num_active_players == 1:
+                reward += 0.5
 
-        return state, reward, done, {}
+            return state, reward, done, {}
 
-    def _determine_winner(self):
-        """Determina el ganador en el showdown."""
-        if self.round_phase == 'showdown':
-            hand_ranks = []
-            for hand in self.players_hands:
-                all_cards = hand + self.community_cards
-                best_hand = self._select_best_hand(all_cards)
-                rank = self.evaluator.evaluate(best_hand[:2], best_hand[2:])
-                hand_ranks.append((rank, best_hand))
+    def calculate_raise_amount(self, player):
+        """Calcula la cantidad que el jugador debe subir."""
+        return max(20, int(0.05 * player.chips))
 
-            best_rank, best_hand = min(hand_ranks, key=lambda x: x[0])
-            self.winner = hand_ranks.index((best_rank, best_hand))
-            self.winning_hand = best_hand
+    def calculate_pot_odds(self, current_bet, pot_size):
+        """Calcula las odds del bote."""
+        if current_bet == 0:
+            return 0.0
+        return current_bet / (pot_size + current_bet)
 
-    def calculate_bluff_penalty(self):
-        """Calcula la penalización en caso de farol."""
-        base_penalty = 10
-        pot_penalty = 0.1 * self.pot_size  # Penalización basada en el tamaño del bote
+    def calculate_equity(self, player_hand, community_cards):
+        """Simula el equity del jugador contra posibles manos oponentes."""
+        if not community_cards:
+            return 0.5  # Asumir 50% de equity si no hay cartas comunitarias
 
-        # Penalización adicional en función de la fase del juego
-        stage_penalty = {
-            "preflop": 0,
-            "flop": 5,
-            "turn": 10,
-            "river": 15
-        }.get(self.round_phase, 0)
+        hand_rank = self.evaluator.evaluate(player_hand, community_cards)
+        return 1 / (1 + hand_rank / 10000)  # Un ejemplo simplificado
 
-        return base_penalty + pot_penalty + stage_penalty
-
-    def calculate_raise_amount(self, equity):
-        """Calcula el monto del raise basado en la equidad y el tamaño del bote."""
-        base_raise = 10
-        adjusted_raise = base_raise * (equity / 0.5)
-        pot_factor = 0.1 * self.pot_size
-        total_raise = adjusted_raise + pot_factor
-        raise_amount = min(total_raise, self.player_chips[self.player_position] - self.current_bet)
-
-        # Ajuste según la fase del juego
-        stage_multiplier = {
-            "preflop": 1.0,
-            "flop": 1.2,
-            "turn": 1.5,
-            "river": 1.8
-        }.get(self.round_phase, 1.0)
-
-        return raise_amount * stage_multiplier
-
-    def calculate_bluff_raise_amount(self):
-        """Calcula el monto del raise en caso de farol."""
-        base_bluff_raise = 20
-        pot_factor = 0.2 * self.pot_size
-        bluff_raise_amount = base_bluff_raise + pot_factor
-        num_opponents = len(self.player_chips) - 1
-        bluff_raise_amount *= (num_opponents / 6)
-        return min(bluff_raise_amount, self.player_chips[self.player_position])
-
-    def _next_phase(self):
-        """Avanza a la siguiente fase del juego."""
-        if self.round_phase == 'preflop':
-            self.community_cards = []
-            self.round_phase = 'flop'
-            self.community_cards.extend(self._deal_cards(3))
-        elif self.round_phase == 'flop':
-            self.round_phase = 'turn'
-            self.community_cards.append(self._deal_cards(1)[0])
-        elif self.round_phase == 'turn':
-            self.round_phase = 'river'
-            self.community_cards.append(self._deal_cards(1)[0])
-        elif self.round_phase == 'river':
-            self.round_phase = 'showdown'
-        elif self.round_phase == 'showdown':
-            self.done = True
-
-    def _is_game_over(self):
-        """Determina si el juego ha terminado."""
-        if self.round_phase == 'showdown':
-            return True
-
-        # Verifica si algún jugador se ha quedado sin fichas y el juego no está en showdown
-        if any(chips <= 0 for chips in self.player_chips):
-            return True
-
-        return False
+    def player_folds(self, player_position):
+        """Marca a un jugador como retirado (fold)."""
+        self.folded_players.add(player_position)
+        self.players[player_position].set_action('fold')
 
     def _calculate_rewards(self):
-        """Calcula las recompensas en el showdown."""
-        rewards = [0] * 6
-        if not self.community_cards:
-            return rewards
+        """Calcula las recompensas al final del juego."""
+        return [0] * self.num_players
 
-        hand_ranks = []
-        for hand in self.players_hands:
-            all_cards = hand + self.community_cards
-            best_hand = self._select_best_hand(all_cards)
-            rank = self.evaluator.evaluate(best_hand[:2], best_hand[2:])
-            hand_ranks.append(rank)
-
-        best_rank = min(hand_ranks)
-        winners = [i for i, rank in enumerate(hand_ranks) if rank == best_rank]
-
-        total_winners = len(winners)
-        reward = self.pot_size / total_winners if total_winners > 0 else 0
-
-        for i in range(6):
-            if i in winners:
-                rewards[i] = reward
-            else:
-                rewards[i] = -self.pot_size / 6
-
-        return rewards
-
-    def _select_best_hand(self, all_cards):
-        """Selecciona la mejor mano de 5 cartas de las cartas dadas."""
-        best_hand = None
-        best_rank = float('inf')
-
-        for combo in combinations(all_cards, 5):
-            hand_cards = list(combo)
-            rank = self.evaluator.evaluate(hand_cards[:2], hand_cards[2:])
-            if rank < best_rank:
-                best_rank = rank
-                best_hand = hand_cards
-
-        return best_hand
-
-    def render(self):
-        """Muestra el estado actual del juego (opcional)."""
-        print(f"Round phase: {self.round_phase}")
-        print(f"Community cards: {[Card.int_to_str(card) for card in self.community_cards]}")
-        for i, hand in enumerate(self.players_hands):
-            print(f"Player {i + 1} hand: {[Card.int_to_str(card) for card in hand]}")
-        print(f"Pot size: {self.pot_size}")
-        print(f"Current bet: {self.current_bet}")
-        print(f"Player chips: {self.player_chips}")
-        print(f"Action history: {self.action_history}")
-        print(f"Round history: {self.round_history}")
-        print(f"Player position: {self.player_position}")
-        print(f"Win probability: {self.win_probability}")
-        print(f"Pot odds: {self.pot_odds}")
-        print(f"Stack sizes: {self.stack_sizes}")
-        print(f"Previous bets: {self.previous_bets}")
-        if self.round_phase == 'showdown':
-            print(f"Winner: Player {self.winner + 1} with hand: {self.winning_hand}")
-
-
-
-
-# Ejemplo de uso
-if __name__ == "__main__":
-    env = PokerEnvSixMax()
-    state = env.reset()
-    env.render()
-    state, reward, done, _ = env.step(1)  # Ejemplo de llamada a la acción "call"
-    env.render()
+    def _is_game_over(self):
+        """Verifica si el juego ha terminado."""
+        return self.done
