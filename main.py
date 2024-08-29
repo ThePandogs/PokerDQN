@@ -1,11 +1,13 @@
 import logging
+import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 from treys import Card, Evaluator
-from DQNAgent import DQNAgent
+
+from DQNAgent import DQNAgent, process_state
 from PokerEnvSixMax import PokerEnvSixMax
-import os
-import matplotlib.pyplot as plt
+
 
 def evaluate_hand(player_hand, community_cards):
     evaluator = Evaluator()
@@ -15,53 +17,61 @@ def evaluate_hand(player_hand, community_cards):
     else:
         return None
 
+
 def convert_cards(cards):
     print(f"Converting cards: {[Card.int_to_str(card) for card in cards]}")  # Debug print
     return cards
 
 
-def process_state(state: dict) -> np.ndarray:
-    """
-    Procesa el estado crudo del juego en un formato adecuado para el modelo DQN.
-
-    Args:
-        state (dict): El estado crudo del juego.
-
-    Returns:
-        np.ndarray: El estado procesado como un array numpy.
-    """
-    print(state)
-    # Datos de jugadores
-    player_hands = np.array([evaluate_hand(hand, state['community_cards']) for hand in state['player_hands']], dtype=np.float32)
-    player_chips = np.array(state['player_chips'], dtype=np.float32)
-
-    player_positions = np.array([i for i, _ in enumerate(state['player_positions'])], dtype=np.float32)
-    win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
-    pot_odds = np.array(state['pot_odds'], dtype=np.float32)
-    stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
-    previous_bets = np.array(state['previous_bets'], dtype=np.float32)
-
-    round_stage = {"preflop": 0, "flop": 1, "turn": 2, "river": 3, "showdown": 4}.get(state['round'], -1)
-    pot_size = np.array([state['pot_size']], dtype=np.float32)
-    current_bet = np.array([state['current_bet']], dtype=np.float32)
-    action_history = np.array(state['action_history'], dtype=np.float32)
-    processed_state = np.concatenate([
-        np.array([round_stage], dtype=np.int32),
-        player_hands.flatten(),
-        pot_size,
-        current_bet,
-        player_chips.flatten(),
-        action_history.flatten(),
-        player_positions.flatten(),
-        win_probabilities.flatten(),
-        pot_odds.flatten(),
-        stack_sizes.flatten(),
-        previous_bets.flatten()
-    ])
-
-    logging.debug(f"Processed state shape: {processed_state.shape}")
-    return processed_state
-
+# def process_state(state: dict) -> np.ndarray:
+#     """
+#     Procesa el estado crudo del juego en un formato adecuado para el modelo DQN.
+#
+#     Args:
+#         state (dict): El estado crudo del juego.
+#
+#     Returns:
+#         np.ndarray: El estado procesado como un array numpy.
+#     """
+#     print(state)
+#     # Datos de jugadores
+#
+#     round_num = np.array(state['round'], dtype=np.int32)
+#     comunity_card = np.array(state['community_cards'], dtype=np.float32)
+#
+#     player_positions = np.array([player.hand for player in state['players']], dtype=np.int32)
+#
+#     player_hands = np.array([player.hand for player in state['players']], dtype=np.int32)
+#     player_rewards = np.array([player.reward for player in state['players']], dtype=np.float32)
+#     player_chips = np.array([player['chips'] for player in state['players']], dtype=np.float32)
+#
+#
+#     player_positions = np.array([i for i, _ in enumerate(state['player_positions'])], dtype=np.float32)
+#
+#     win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
+#     pot_odds = np.array(state['pot_odds'], dtype=np.float32)
+#     stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
+#     previous_bets = np.array(state['previous_bets'], dtype=np.float32)
+#
+#     pot_size = np.array([state['pot_size']], dtype=np.float32)
+#     current_bet = np.array([state['current_bet']], dtype=np.float32)
+#     action_history = np.array(state['action_history'], dtype=np.float32)
+#     processed_state = np.concatenate([
+#         np.array([round_num], dtype=np.int32),
+#         player_hands.flatten(),
+#         pot_size,
+#         current_bet,
+#         player_chips.flatten(),
+#         action_history.flatten(),
+#         player_positions.flatten(),
+#         win_probabilities.flatten(),
+#         pot_odds.flatten(),
+#         stack_sizes.flatten(),
+#         previous_bets.flatten()
+#     ])
+#
+#     logging.debug(f"Processed state shape: {processed_state.shape}")
+#     return processed_state
 
 
 def plot_progress(rewards, epsilons):
@@ -86,10 +96,10 @@ def plot_progress(rewards, epsilons):
 
 
 def get_state_size(env):
-    env.create_new_game()
     state = env.reset()  # Resetea el entorno para obtener un estado inicial
     processed_state = process_state(state)  # Procesa el estado crudo
     return processed_state.size  # Devuelve el tamaño del estado procesado
+
 
 if __name__ == "__main__":
     EPISODES = 3500
@@ -112,23 +122,25 @@ if __name__ == "__main__":
 
     rewards = []
     epsilons = []
-    env.create_new_game()
+
     for e in range(EPISODES):
-        state = env.reset()
+        state = env.reset()  # Inicia una nueva mano o episodio
         state = process_state(state)
+        state_size = state.size  # Usa el tamaño correcto
         state = np.reshape(state, [1, state_size])
 
         episode_reward = 0
         while not env.done:
             action = agent.act(state)
-            next_state, reward, done, _ = env.step(action)
+            next_state, done, _ = env.step(action)
             next_state = process_state(next_state)
+            state_size = next_state.size
+
             next_state = np.reshape(next_state, [1, state_size])
 
-            reward = reward if not done else -10
-            agent.remember(state, action, reward, next_state, done)
-            state = next_state
-            episode_reward += reward
+
+            agent.remember(state, action, next_state,done)
+
 
             if done:
                 rewards.append(episode_reward)

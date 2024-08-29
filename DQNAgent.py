@@ -1,15 +1,16 @@
 import logging
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 from keras.api import optimizers, models, layers
-from keras.src.layers import Flatten
-from treys import Card, Evaluator
-import os
-import matplotlib.pyplot as plt
-from PrioritizedReplayBuffer import PrioritizedReplayBuffer
+
 from PokerEnvSixMax import PokerEnvSixMax
-from common import evaluate_hand
+from PrioritizedReplayBuffer import PrioritizedReplayBuffer
+
 # Configurar el nivel de logging
 logging.basicConfig(level=logging.DEBUG)
+
 
 class DQNAgent:
     def __init__(self, state_size, action_size):
@@ -35,24 +36,27 @@ class DQNAgent:
         model.add(layers.Dense(self.action_size, activation='linear'))
         model.compile(loss='mean_squared_error', optimizer=self.optimizer)
         return model
+
     def act(self, state):
-        print(state)
         """Determina la acción a tomar basado en el estado actual."""
-        state = np.reshape(state, [1, self.state_size])  # Asegurar que el estado tiene las dimensiones correctas
+
+        state = np.reshape(state, [1,  state.size])  # Asegurar que el estado tiene las dimensiones correctas
         if np.random.rand() <= self.epsilon:
             action = np.random.choice(self.action_size)
+            choose_action = "Action Random"
         else:
             act_values = self.model.predict(state)
             action = np.argmax(act_values[0])
+            choose_action = "Prediction"
 
         # Logging de la acción tomada
-        logging.debug(f"Player {self.player_position} takes action: {action}")
+        logging.debug(f"Player {self.player_position} takes action: {action} using {choose_action}")
         logging.debug(f"Action history before update: {self.action_history}")
         return action
 
-    def remember(self, state, action, reward, next_state, done):
+    def remember(self, state, action, next_state, done):
         """Almacena la experiencia en la memoria del agente."""
-        self.memory.add((state, action, reward, next_state, done), priority=1.0)
+        self.memory.add((state, action, next_state, done), priority=1.0)
 
     def replay(self, batch_size):
         """Actualiza el modelo basado en una muestra aleatoria de la memoria."""
@@ -99,7 +103,8 @@ class DQNAgent:
     def update_action_history(self, player_position, action):
         """Actualiza el historial de acciones."""
         self.action_history[player_position] = action
-        logging.debug(f"Updated action history after action {action} by player {player_position}: {self.action_history}")
+        logging.debug(
+            f"Updated action history after action {action} by player {player_position}: {self.action_history}")
 
     def save(self, filename):
         """Guarda el modelo entrenado a un archivo."""
@@ -115,56 +120,63 @@ class DQNAgent:
             logging.warning(f"Model file {filename} not found, starting with a new model.")
 
 
-import numpy as np
-
-
+# Procesar estado (asegúrate de que el tamaño del estado sea el correcto)
 def process_state(state):
-    """
-    Convierte el estado del juego en un formato numérico adecuado para el procesamiento.
-    En particular, convierte el action_history en una secuencia de números.
-    """
+    round_ = state['round']
+    community_cards = np.array(state['community_cards'], dtype=np.int32)
+    pot_size = state['pot_info']['pot_size']
+    current_bet = state['pot_info']['current_bet']
+    pot_odds = state['pot_info']['pot_odds']
 
-    # Convierte la historia de acciones en un formato numérico
-    action_history_processed = []
-    for action in state['action_history']:
-        if isinstance(action, dict):
-            # Si el action es un diccionario, extrae los valores numéricos relevantes
-            player = int(action['player'].replace('Player', ''))  # Convierte el nombre del jugador a un índice numérico
-            action_type = PokerEnvSixMax.ACTION_MAP[action['action']]  # Mapa de acciones a valores numéricos
-            bet = action['bet']  # Cantidad apostada
-            action_history_processed.append([player, action_type, bet])
-        elif isinstance(action, tuple):
-            # Si el action es una tupla (player_position, action_type), ya es numérica
-            action_history_processed.append(list(action))
+    # Players data
+    players = state['players']
+    player_positions = np.array([player['position'] for player in players], dtype=np.int32)
+    player_chips = np.array([player['chips'] for player in players], dtype=np.float32)
+    player_hands = np.array([card for player in players for card in player['hand']], dtype=np.int32)
+    previous_bets = np.array([player['previous_bet'] for player in players], dtype=np.float32)
 
-    # Asegúrate de que action_history_processed esté uniformemente estructurado
-    if action_history_processed:
-        max_len = max(len(a) for a in action_history_processed)
-        action_history_array = np.array([a + [0] * (max_len - len(a)) for a in action_history_processed],
-                                        dtype=np.float32)
-    else:
-        action_history_array = np.array([], dtype=np.float32)
+    # Flatten action history
+    action_histories = []
+    for player in players:
+        if player['action_history']:
+            actions = [ah['action'] for ah in player['action_history']]
+            amounts = [ah['amount'] for ah in player['action_history']]
+            action_histories.append(np.concatenate([np.array(actions), np.array(amounts)]))
+        else:
+            action_histories.append(np.zeros(0))  # Or another appropriate default value
 
-    # Continúa procesando otros campos del estado si es necesario
-    state_processed = {
-        'round': state['round'],
-        'community_cards': np.array(state['community_cards'], dtype=np.float32),
-        'pot_size': state['pot_size'],
-        'current_bet': state['current_bet'],
-        'pot_odds': state['pot_odds'],
-        'player_positions': state['player_positions'],  # Si es necesario puedes mapear nombres a índices
-        'player_hands': np.array(state['player_hands'], dtype=np.float32),
-        'player_chips': np.array(state['player_chips'], dtype=np.float32),
-        'previous_bets': np.array(state['previous_bets'], dtype=np.float32),
-        'action_history': action_history_array,  # El historial procesado
-        'round_history': state['round_history'],  # Si necesitas procesarlo, hazlo aquí
-        'player_position': state['player_position'],
-        'win_probabilities': np.array(state['win_probabilities'], dtype=np.float32),
-        'stack_sizes': np.array(state['stack_sizes'], dtype=np.float32),
-    }
+    action_histories = np.concatenate(action_histories)
+
+    # Other data
+    win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
+    stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
+
+    # Flatten round history
+    round_history = []
+    for rh in state['round_history']:
+        round_history.extend([
+            rh['player_position'],
+            rh['action'],
+            rh['amount']
+        ])
+    round_history = np.array(round_history, dtype=np.float32)
+
+    # Concatenate all data into one array
+    state_processed = np.concatenate([
+        np.array([round_], dtype=np.int32),
+        community_cards,
+        np.array([pot_size, current_bet, pot_odds], dtype=np.float32),
+        player_positions,
+        player_chips,
+        player_hands,
+        previous_bets,
+        action_histories,
+        win_probabilities,
+        stack_sizes,
+        round_history
+    ])
 
     return state_processed
-
 
 def plot_progress(rewards, epsilons):
     # Graficar la recompensa promedio
@@ -186,11 +198,12 @@ def plot_progress(rewards, epsilons):
     plt.tight_layout()
     plt.show()
 
+
 def get_state_size(env):
     state = env.reset()
     processed_state = process_state(state)
-    print(processed_state.size)
     return processed_state.size
+
 
 if __name__ == "__main__":
     EPISODES = 3500
@@ -213,28 +226,24 @@ if __name__ == "__main__":
 
     rewards = []
     epsilons = []
-    env.create_new_game()
+    env.reset()
     for e in range(EPISODES):
         state = env.reset()
         state = process_state(state)
+        state_size = get_state_size(env)
         state = np.reshape(state, [1, state_size])
 
         episode_reward = 0
         while not env.done:
             action = agent.act(state)
-            next_state, reward, done, _ = env.step(action)
+            next_state, done, _ = env.step(action)
             next_state = process_state(next_state)
             next_state = np.reshape(next_state, [1, state_size])
 
-            reward = reward if not done else -10
-            agent.remember(state, action, reward, next_state, done)
+            agent.remember(state, action, next_state, done)
             state = next_state
-            episode_reward += reward
 
             if done:
-                rewards.append(episode_reward)
-                epsilons.append(agent.epsilon)
-                print(f"Episode: {e}/{EPISODES}, Reward: {episode_reward}, Epsilon: {agent.epsilon:.2f}")
                 break
 
         if agent.memory.get_size() > batch_size:
@@ -242,6 +251,3 @@ if __name__ == "__main__":
 
     # Guardar el modelo después de entrenar
     agent.save("poker_dqn_model.keras")
-
-    # Graficar el progreso
-    plot_progress(rewards, epsilons)
