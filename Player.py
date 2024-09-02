@@ -6,7 +6,6 @@ class Player:
         self.hand = []
         self.previous_bet = 0
         self.action_history = []  # Historial de acciones del propio jugador
-        self.bet_history = []     # Historial de apuestas del propio jugador
         self.other_players_actions = {}  # Almacenará las acciones de los demás jugadores
         self.reward = 0
         # Para cada jugador, almacenaremos su historial de acciones y apuestas

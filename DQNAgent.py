@@ -4,6 +4,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 from keras.api import optimizers, models, layers
+from treys import Card
 
 from PokerEnvSixMax import PokerEnvSixMax
 from PrioritizedReplayBuffer import PrioritizedReplayBuffer
@@ -21,6 +22,7 @@ class DQNAgent:
         self.epsilon = 1.0  # Tasa de exploración
         self.epsilon_min = 0.1
         self.epsilon_decay = 0.995
+        self.epsilon_update_freq = 100  # Frecuencia de actualización de epsilon
         self.optimizer = optimizers.Adam(learning_rate=0.001)
         self.model = self._build_model()
         self.target_model = self._build_model()  # Modelo objetivo para el entrenamiento
@@ -40,9 +42,9 @@ class DQNAgent:
     def act(self, state):
         """Determina la acción a tomar basado en el estado actual."""
 
-        state = np.reshape(state, [1,  state.size])  # Asegurar que el estado tiene las dimensiones correctas
+        state = np.reshape(state, [1, state.size])  # Asegurar que el estado tiene las dimensiones correctas
         if np.random.rand() <= self.epsilon:
-            action = np.random.choice(self.action_size)
+            action = np.random.choice([1, 2, 3, 4])
             choose_action = "Action Random"
         else:
             act_values = self.model.predict(state)
@@ -50,8 +52,6 @@ class DQNAgent:
             choose_action = "Prediction"
 
         # Logging de la acción tomada
-        logging.debug(f"Player {self.player_position} takes action: {action} using {choose_action}")
-        logging.debug(f"Action history before update: {self.action_history}")
         return action
 
     def remember(self, state, action, next_state, done):
@@ -65,18 +65,28 @@ class DQNAgent:
 
         minibatch, indices, weights = self.memory.sample(batch_size)
 
+        # Verifica y depura las formas de los elementos en minibatch
+        state_shapes = [x[0].shape for x in minibatch]
+        print(f"State shapes in minibatch: {state_shapes}")
+
+        # Asegúrate de que todos los estados tienen la misma forma
+        state_shape_set = set(state_shapes)
+        if len(state_shape_set) > 1:
+            raise ValueError("Inconsistent state shapes detected in minibatch.")
+
+        # Procesa los estados, acciones, siguientes estados y hechos
         states = np.array([x[0] for x in minibatch])
         actions = np.array([x[1] for x in minibatch])
-        rewards = np.array([x[2] for x in minibatch])
-        next_states = np.array([x[3] for x in minibatch])
-        dones = np.array([x[4] for x in minibatch])
+        next_states = np.array([x[2] for x in minibatch])
+        dones = np.array([x[3] for x in minibatch])
 
         # Verifica la forma de los estados
-        states = np.squeeze(states, axis=1)
-        next_states = np.squeeze(next_states, axis=1)
+        print(f"States shape: {states.shape}")
+        print(f"Next states shape: {next_states.shape}")
 
-        # Asegúrate de que la forma de `states` sea (batch_size, 144)
+        # Asegúrate de que la forma de `states` sea (batch_size, state_size)
         assert states.shape[1:] == (self.state_size,)
+        assert next_states.shape[1:] == (self.state_size,)
 
         targets = self.model.predict(states)
         next_q_values = self.target_model.predict(next_states)
@@ -103,8 +113,6 @@ class DQNAgent:
     def update_action_history(self, player_position, action):
         """Actualiza el historial de acciones."""
         self.action_history[player_position] = action
-        logging.debug(
-            f"Updated action history after action {action} by player {player_position}: {self.action_history}")
 
     def save(self, filename):
         """Guarda el modelo entrenado a un archivo."""
@@ -122,50 +130,52 @@ class DQNAgent:
 
 # Procesar estado (asegúrate de que el tamaño del estado sea el correcto)
 def process_state(state):
-    round_ = state['round']
-    community_cards = np.array(state['community_cards'], dtype=np.int32)
-    pot_size = state['pot_info']['pot_size']
-    current_bet = state['pot_info']['current_bet']
-    pot_odds = state['pot_info']['pot_odds']
-
-    # Players data
+    # Asegúrate de que cada componente tenga una forma consistente
+    round_ = np.array([state['round']], dtype=np.int32)
+    community_cards = np.array([Card.get_rank_int(card) for card in state['community_cards']], dtype=np.float32)
+    pot_info = state['pot_info']
+    pot_size = np.array([pot_info['pot_size']], dtype=np.float32)
+    current_bet = np.array([pot_info['current_bet']], dtype=np.float32)
+    pot_odds = np.array([pot_info['pot_odds']], dtype=np.float32)
     players = state['players']
     player_positions = np.array([player['position'] for player in players], dtype=np.int32)
     player_chips = np.array([player['chips'] for player in players], dtype=np.float32)
     player_hands = np.array([card for player in players for card in player['hand']], dtype=np.int32)
     previous_bets = np.array([player['previous_bet'] for player in players], dtype=np.float32)
 
-    # Flatten action history
+    # Asegúrate de que action_histories tenga un tamaño fijo
     action_histories = []
     for player in players:
         if player['action_history']:
             actions = [ah['action'] for ah in player['action_history']]
             amounts = [ah['amount'] for ah in player['action_history']]
-            action_histories.append(np.concatenate([np.array(actions), np.array(amounts)]))
+            combined = np.concatenate([actions, amounts])
+            # Calcula el tamaño de relleno para asegurar que no sea negativo
+            pad_size = max(0, 10 - len(combined))
+            action_histories.append(np.pad(combined, (0, pad_size), constant_values=0))
         else:
-            action_histories.append(np.zeros(0))  # Or another appropriate default value
+            action_histories.append(np.zeros(10))
 
     action_histories = np.concatenate(action_histories)
 
-    # Other data
     win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
     stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
 
-    # Flatten round history
     round_history = []
     for rh in state['round_history']:
-        round_history.extend([
+        round_history.append([
             rh['player_position'],
             rh['action'],
             rh['amount']
         ])
-    round_history = np.array(round_history, dtype=np.float32)
+    round_history = np.array(round_history, dtype=np.float32).flatten()
 
-    # Concatenate all data into one array
     state_processed = np.concatenate([
-        np.array([round_], dtype=np.int32),
+        round_,
         community_cards,
-        np.array([pot_size, current_bet, pot_odds], dtype=np.float32),
+        pot_size,
+        current_bet,
+        pot_odds,
         player_positions,
         player_chips,
         player_hands,
@@ -176,7 +186,10 @@ def process_state(state):
         round_history
     ])
 
+    print(f"Processed state shape: {state_processed.shape}")
+
     return state_processed
+
 
 def plot_progress(rewards, epsilons):
     # Graficar la recompensa promedio
@@ -240,7 +253,7 @@ if __name__ == "__main__":
             next_state = process_state(next_state)
             next_state = np.reshape(next_state, [1, state_size])
 
-            agent.remember(state, action, next_state, done)
+            agent.remember(state, action, rewards, next_state, done)
             state = next_state
 
             if done:

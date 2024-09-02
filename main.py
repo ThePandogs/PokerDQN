@@ -23,57 +23,6 @@ def convert_cards(cards):
     return cards
 
 
-# def process_state(state: dict) -> np.ndarray:
-#     """
-#     Procesa el estado crudo del juego en un formato adecuado para el modelo DQN.
-#
-#     Args:
-#         state (dict): El estado crudo del juego.
-#
-#     Returns:
-#         np.ndarray: El estado procesado como un array numpy.
-#     """
-#     print(state)
-#     # Datos de jugadores
-#
-#     round_num = np.array(state['round'], dtype=np.int32)
-#     comunity_card = np.array(state['community_cards'], dtype=np.float32)
-#
-#     player_positions = np.array([player.hand for player in state['players']], dtype=np.int32)
-#
-#     player_hands = np.array([player.hand for player in state['players']], dtype=np.int32)
-#     player_rewards = np.array([player.reward for player in state['players']], dtype=np.float32)
-#     player_chips = np.array([player['chips'] for player in state['players']], dtype=np.float32)
-#
-#
-#     player_positions = np.array([i for i, _ in enumerate(state['player_positions'])], dtype=np.float32)
-#
-#     win_probabilities = np.array(state['win_probabilities'], dtype=np.float32)
-#     pot_odds = np.array(state['pot_odds'], dtype=np.float32)
-#     stack_sizes = np.array(state['stack_sizes'], dtype=np.float32)
-#     previous_bets = np.array(state['previous_bets'], dtype=np.float32)
-#
-#     pot_size = np.array([state['pot_size']], dtype=np.float32)
-#     current_bet = np.array([state['current_bet']], dtype=np.float32)
-#     action_history = np.array(state['action_history'], dtype=np.float32)
-#     processed_state = np.concatenate([
-#         np.array([round_num], dtype=np.int32),
-#         player_hands.flatten(),
-#         pot_size,
-#         current_bet,
-#         player_chips.flatten(),
-#         action_history.flatten(),
-#         player_positions.flatten(),
-#         win_probabilities.flatten(),
-#         pot_odds.flatten(),
-#         stack_sizes.flatten(),
-#         previous_bets.flatten()
-#     ])
-#
-#     logging.debug(f"Processed state shape: {processed_state.shape}")
-#     return processed_state
-
-
 def plot_progress(rewards, epsilons):
     # Graficar la recompensa promedio
     plt.figure(figsize=(14, 7))
@@ -102,7 +51,7 @@ def get_state_size(env):
 
 
 if __name__ == "__main__":
-    EPISODES = 3500
+    EPISODES = 3
     env = PokerEnvSixMax()
     state_size = get_state_size(env)  # Llama a la función y obtiene el tamaño del estado
     action_size = 4
